@@ -49,3 +49,6 @@ It supports:
 ```bash
 # Run locally with Streamlit
 streamlit run app.py
+```
+
+⭐ the repo if you liked it!
