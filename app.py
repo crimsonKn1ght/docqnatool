@@ -1,3 +1,11 @@
+"""
+docqnatool - Streamlit-based document Q&A assistant.
+
+Supports PDF, DOCX, and TXT uploads with optional OCR. Documents are chunked,
+embedded with a local TF-IDF vectorizer, stored in a FAISS index, and queried
+via ChatGroq (llama-3.3-70b-versatile).
+"""
+
 import os
 import io
 import hashlib
@@ -10,10 +18,9 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_groq import ChatGroq
 from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
+from langchain_core.embeddings import Embeddings
 from sklearn.feature_extraction.text import TfidfVectorizer
 import numpy as np
-from langchain.embeddings.base import Embeddings
 
 # ----------------- CONFIG ----------------- #
 st.set_page_config(
@@ -22,6 +29,13 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# ----------------- CONSTANTS ----------------- #
+LLM_MODEL_NAME = "llama-3.3-70b-versatile"
+LLM_TEMPERATURE = 0
+CHUNK_SIZE = 1000
+CHUNK_OVERLAP = 200
+SIMILARITY_TOP_K = 5
 
 # ----------------- CUSTOM CSS ----------------- #
 st.markdown(
@@ -146,6 +160,7 @@ st.markdown(
 
 # ----------------- UTILS ----------------- #
 def get_file_hash(file_content: bytes) -> str:
+    """Return the MD5 hex digest of file_content for duplicate detection."""
     return hashlib.md5(file_content).hexdigest()
 
 def normalize_text(text: str) -> str:
@@ -153,6 +168,7 @@ def normalize_text(text: str) -> str:
     return " ".join(text.split())
 
 def ocr_image(image_bytes: bytes) -> str:
+    """Run Tesseract OCR on image_bytes and return the extracted text, or '' on failure."""
     try:
         image = Image.open(io.BytesIO(image_bytes))
         return pytesseract.image_to_string(image)
@@ -160,6 +176,7 @@ def ocr_image(image_bytes: bytes) -> str:
         return ""
 
 def extract_text_from_pdf(file_bytes: io.BytesIO, use_ocr: bool = True) -> str:
+    """Extract text from a PDF byte stream, optionally OCR-ing embedded images."""
     import fitz
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     text = ""
@@ -170,7 +187,9 @@ def extract_text_from_pdf(file_bytes: io.BytesIO, use_ocr: bool = True) -> str:
         if use_ocr:
             for img_meta in page.get_images(full=True):
                 try:
-                    base_image = doc.extract_image(img_meta[0])
+                    # img_meta tuple: (xref, smask, width, height, bpc, colorspace, alt, name, filter, enc)
+                    xref = img_meta[0]
+                    base_image = doc.extract_image(xref)
                     ocr_text = ocr_image(base_image["image"])
                     if ocr_text.strip() and ocr_text not in text:
                         text += "\n" + ocr_text
@@ -179,6 +198,7 @@ def extract_text_from_pdf(file_bytes: io.BytesIO, use_ocr: bool = True) -> str:
     return normalize_text(text)
 
 def extract_text_from_docx(file_bytes: io.BytesIO, use_ocr: bool = True) -> str:
+    """Extract paragraph text (and optionally image OCR text) from a DOCX byte stream."""
     from docx import Document as DocxDocument
     doc = DocxDocument(file_bytes)
     text = "\n".join(para.text for para in doc.paragraphs)
@@ -197,14 +217,24 @@ def extract_text_from_docx(file_bytes: io.BytesIO, use_ocr: bool = True) -> str:
     return normalize_text(text)
 
 def extract_text_from_txt(file_bytes: io.BytesIO) -> str:
+    """Decode a plain-text byte stream as UTF-8, falling back to lossy decoding on errors."""
+    raw = file_bytes.read()  # read once; the stream is exhausted after this call
     try:
-        text = file_bytes.read().decode("utf-8")
-    except Exception:
-        text = file_bytes.read().decode("utf-8", errors="ignore")
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("utf-8", errors="ignore")
     return normalize_text(text)
 
 # ----------------- TFIDF EMBEDDINGS ----------------- #
 class TFIDFEmbeddings(Embeddings):
+    """
+    LangChain-compatible Embeddings implementation backed by scikit-learn TfidfVectorizer.
+
+    The vectorizer is fit lazily on the first call to embed_documents(). Vectors are
+    zero-padded or truncated to exactly `max_features` dimensions so FAISS receives a
+    uniform-width matrix.
+    """
+
     def __init__(self, max_features: int = 384):
         self.vectorizer = TfidfVectorizer(
             max_features=max_features,
@@ -236,15 +266,30 @@ class TFIDFEmbeddings(Embeddings):
 
 # ----------------- DOCUMENT MANAGER ----------------- #
 class DocumentManager:
+    """
+    Manages the full document lifecycle: ingestion, deduplication, chunking,
+    vector-index construction, and LLM-backed question answering.
+
+    State is stored on st.session_state so it survives Streamlit reruns.
+    """
+
     def __init__(self):
         self.documents: List[Document] = []
         self.processed_files = {}
         self.embeddings = TFIDFEmbeddings()
         self.vectordb = None
-        try:
-            self.llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0)
-        except Exception:
+        if not os.environ.get("GROQ_API_KEY"):
+            st.warning(
+                "GROQ_API_KEY is not set. "
+                "Document Q&A will be unavailable until a valid key is provided."
+            )
             self.llm = None
+        else:
+            try:
+                self.llm = ChatGroq(model_name=LLM_MODEL_NAME, temperature=LLM_TEMPERATURE)
+            except Exception as e:
+                st.warning(f"Failed to initialize language model: {e}")
+                self.llm = None
         self.prompt_template = PromptTemplate(
             input_variables=["context", "question"],
             template="""Use the following context to answer the question comprehensively. If you cannot find the answer in the context, say "I cannot find the answer in the provided documents."
@@ -272,7 +317,7 @@ Answer:""",
             self.vectordb = None
             return
         try:
-            splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+            splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
             chunks = splitter.split_documents(self.documents)
             all_texts = [c.page_content for c in chunks]
             self.embeddings = TFIDFEmbeddings()
@@ -290,21 +335,21 @@ Answer:""",
         if not self.llm:
             return "❌ Language model is not available. Please check your API configuration."
         try:
-            docs = self.vectordb.similarity_search(question, k=5)
+            docs = self.vectordb.similarity_search(question, k=SIMILARITY_TOP_K)
             if not docs:
                 return "🔍 I cannot find any relevant information in the uploaded documents for your question."
             context = "\n\n".join(
                 [f"📄 Source: {d.metadata.get('source','Unknown')}\n{d.page_content}" for d in docs]
             )
-            chain = LLMChain(llm=self.llm, prompt=self.prompt_template)
-            return chain.run(context=context, question=question)
+            chain = self.prompt_template | self.llm
+            return chain.invoke({"context": context, "question": question}).content
         except Exception as e:
             return f"❌ Error processing your question: {str(e)}"
 
     def get_stats(self):
         total_files = len(self.processed_files)
-        total_words = sum([info.get("word_count", 0) for info in self.processed_files.values()])
-        total_size = sum([info.get("size", 0) for info in self.processed_files.values()])
+        total_words = sum(info.get("word_count", 0) for info in self.processed_files.values())
+        total_size = sum(info.get("size", 0) for info in self.processed_files.values())
         return {"files": total_files, "words": total_words, "size_mb": round(total_size / (1024 * 1024), 2)}
 
 # ----------------- SESSION STATE ----------------- #
@@ -348,6 +393,9 @@ with st.sidebar:
         with col2:
             st.metric("📝 Words", f"{stats['words']:,}")
         st.markdown("### 📋 Processed Files")
+        # processed_files is keyed by content hash, so two uploads with the same filename
+        # but different content will both appear as separate entries. seen_names prevents
+        # the same filename being listed twice in the sidebar.
         seen_names = set()
         for file_info in st.session_state.doc_manager.processed_files.values():
             if file_info["name"] not in seen_names:
@@ -377,8 +425,10 @@ if uploaded_files:
             elif file_extension == ".txt":
                 text_content = extract_text_from_txt(file_bytes)
             success, message = st.session_state.doc_manager.add_file(uploaded_file.name, text_content, file_hash, uploaded_file.size)
-            if success: st.success(message)
-            else: st.info(message)
+            if success:
+                st.success(message)
+            else:
+                st.info(message)
         except Exception as e:
             st.error(f"❌ Error processing {uploaded_file.name}: {str(e)}")
     with st.spinner("🔄 Building search index..."):
