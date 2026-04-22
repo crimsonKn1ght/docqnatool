@@ -1,0 +1,26 @@
+# UI
+streamlit
+
+# PDF / OCR / DOCX
+pymupdf==1.24.1
+pytesseract==0.3.10
+Pillow==10.0.1
+python-docx==1.1.0
+
+# LangChain + Embeddings + Vector DB
+langchain==0.1.20
+langchain-community==0.0.38
+langchain-groq==0.1.5
+langchain-huggingface==0.0.3
+sentence-transformers>=2.6.0
+faiss-cpu==1.7.4
+python-dotenv==1.0.0
+
+# PyTorch (CPU builds — safe for Streamlit Cloud)
+torch==2.2.2
+torchvision==0.17.2
+torchaudio==2.2.2
+
+# Core dependencies
+scikit-learn>=1.3.0
+numpy>=1.24.0
