@@ -4,7 +4,7 @@ libtesseract-dev
 build-essential
 cmake
 pkg-config
-libfreetype6-dev
+libfreetype-dev
 libharfbuzz-dev
 libjpeg-dev
 libopenjp2-7-dev
