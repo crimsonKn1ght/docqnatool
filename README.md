@@ -10,10 +10,16 @@
     <img src="https://img.shields.io/github/forks/crimsonKn1ght/docqnatool?style=for-the-badge" alt="GitHub forks">
   </a>
   <a href="https://github.com/crimsonKn1ght/docqnatool/graphs/commit-activity">
-    <img src="https://img.shields.io/maintenance/yes/2025?style=for-the-badge" alt="Maintained">
+    <img src="https://img.shields.io/maintenance/yes/2026?style=for-the-badge" alt="Maintained">
   </a>
   <a href="https://github.com/crimsonKn1ght/docqnatool">
     <img src="https://img.shields.io/github/languages/top/crimsonKn1ght/docqnatool?style=for-the-badge" alt="Language">
+  </a>
+  <a href="requirements.txt">
+    <img src="https://img.shields.io/badge/python-3.11%2B-blue?style=for-the-badge" alt="Python 3.11+">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/license-MIT-yellow?style=for-the-badge" alt="License: MIT">
   </a>
 </p>
 

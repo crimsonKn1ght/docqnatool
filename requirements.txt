@@ -16,7 +16,7 @@ sentence-transformers>=2.6.0
 faiss-cpu==1.7.4
 python-dotenv==1.0.0
 
-# PyTorch (CPU builds — safe for Streamlit Cloud)
+# PyTorch (CPU builds, safe for Streamlit Cloud)
 torch==2.2.2
 torchvision==0.17.2
 torchaudio==2.2.2
